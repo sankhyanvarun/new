@@ -12,22 +12,51 @@ from typing import List, Dict
 import subprocess
 import sys
 
-def install_system_dependencies():
+# --- Dependency Installation ---
+def install_dependencies():
+    """Install system dependencies for Streamlit Cloud"""
     try:
-        subprocess.run(['apt-get', 'update'], check=True)
-        subprocess.run(['apt-get', 'install', '-y', 
-                       'tesseract-ocr',
-                       'tesseract-ocr-hin',
-                       'tesseract-ocr-eng',
-                       'poppler-utils',
-                       'libsm6',
-                       'libxext6',
-                       'ffmpeg'], check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to install dependencies: {e}", file=sys.stderr)
+        # Check if we're in Linux (Streamlit Cloud)
+        if os.path.exists('/etc/os-release'):
+            # Install dependencies using apt-get
+            subprocess.run(['apt-get', 'update'], check=True)
+            subprocess.run(['apt-get', 'install', '-y',
+                          'tesseract-ocr',
+                          'tesseract-ocr-hin',
+                          'tesseract-ocr-eng',
+                          'poppler-utils'], 
+                          check=True)
+            return True
+        return False
+    except Exception as e:
+        st.error(f"Dependency installation failed: {str(e)}")
+        return False
 
 # Run at startup
-install_system_dependencies()
+install_dependencies()
+
+# --- Path Configuration ---
+def configure_paths():
+    """Configure paths for both local and cloud environments"""
+    if os.path.exists('/usr/bin/tesseract'):  # Streamlit Cloud
+        st.session_state.poppler_path = '/usr/bin'
+        st.session_state.tesseract_path = '/usr/bin/tesseract'
+        pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+    else:  # Local development
+        st.session_state.poppler_path = None  # Let pdf2image find poppler
+        st.session_state.tesseract_path = None  # Use system PATH
+        if sys.platform == 'win32':
+            # Windows-specific path (if Tesseract installed)
+            possible_paths = [
+                'C:/Program Files/Tesseract-OCR/tesseract.exe',
+                'C:/Users/AppData/Local/Tesseract-OCR/tesseract.exe'
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    pytesseract.pytesseract.tesseract_cmd = path
+                    break
+
+configure_paths()
 
 # Set page config
 st.set_page_config(page_title="Enhanced Multi-Language TOC Extractor", layout="wide")
@@ -331,6 +360,45 @@ def parse_toc_english(text: str) -> List[Dict[str, str]]:
 
 # ========== UI AND MAIN APP ==========
 def main():
+    st.title("📖 PDF TOC Extractor")
+    
+    # --- System Verification ---
+    st.subheader("System Verification")
+    
+    # Check Tesseract
+    try:
+        tesseract_version = subprocess.run(
+            ['tesseract', '--version'],
+            capture_output=True, text=True
+        )
+        st.success(f"Tesseract: {tesseract_version.stdout.splitlines()[0]}")
+    except Exception as e:
+        st.error(f"Tesseract check failed: {str(e)}")
+        st.error("""
+            Tesseract OCR is not installed correctly.
+            Please check the deployment logs for installation errors.
+            """)
+        st.stop()
+    
+    # Check Poppler
+    try:
+        pdftoppm_version = subprocess.run(
+            ['pdftoppm', '-v'],
+            capture_output=True, text=True
+        )
+        st.success(f"Poppler utils available")
+    except Exception as e:
+        st.error(f"Poppler check failed: {str(e)}")
+        st.stop()
+    
+    # Check language packs
+    try:
+        langs = pytesseract.get_languages(config='')
+        st.info(f"Available languages: {', '.join(langs)}")
+        if 'hin' not in langs or 'eng' not in langs:
+            st.error("Required language packs (hin, eng) not installed")
+    except Exception as e:
+        st.error(f"Language check failed: {str(e)}")
     
     # Environment verification
     st.write("## System Verification")
