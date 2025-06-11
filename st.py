@@ -12,22 +12,26 @@ from typing import List, Dict
 import subprocess
 import sys
 
+# Initialize system dependencies
 def install_system_dependencies():
     try:
-        subprocess.run(['apt-get', 'update'], check=True)
-        subprocess.run(['apt-get', 'install', '-y', 
-                       'tesseract-ocr',
-                       'tesseract-ocr-hin',
-                       'tesseract-ocr-eng',
-                       'poppler-utils',
-                       'libsm6',
-                       'libxext6',
-                       'ffmpeg'], check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to install dependencies: {e}", file=sys.stderr)
+        # Check if we're in Streamlit Cloud (Linux environment)
+        if os.path.exists('/usr/bin/apt-get'):
+            subprocess.run(['apt-get', 'update'], check=True)
+            subprocess.run(['apt-get', 'install', '-y', 
+                          'tesseract-ocr',
+                          'tesseract-ocr-hin',
+                          'tesseract-ocr-eng',
+                          'poppler-utils',
+                          'libsm6',
+                          'libxext6'], 
+                          check=True)
+    except Exception as e:
+        st.error(f"Dependency installation failed: {str(e)}")
 
 # Run at startup
 install_system_dependencies()
+
 # Set page config
 st.set_page_config(page_title="Enhanced Multi-Language TOC Extractor", layout="wide")
 
@@ -43,16 +47,19 @@ if 'extra_pages' not in st.session_state:
 if 'edit_mode' not in st.session_state:
     st.session_state.edit_mode = False
 
-# Set paths based on environment
-if os.path.exists('/usr/bin/tesseract'):  # Streamlit Cloud
-    st.session_state.poppler_path = '/usr/bin'
-    st.session_state.tesseract_path = '/usr/bin/tesseract'
-    pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
-else:  # Local development
-    st.session_state.poppler_path = 'poppler/bin' if os.path.exists('poppler/bin') else None
-    st.session_state.tesseract_path = 'Tesseract-OCR/tesseract.exe' if os.path.exists('Tesseract-OCR') else None
-    if st.session_state.tesseract_path:
-        pytesseract.pytesseract.tesseract_cmd = st.session_state.tesseract_path
+# Configure paths - works for both local and cloud
+def configure_paths():
+    if os.path.exists('/usr/bin/tesseract'):  # Streamlit Cloud
+        st.session_state.poppler_path = '/usr/bin'
+        st.session_state.tesseract_path = '/usr/bin/tesseract'
+        pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+    else:  # Local development
+        st.session_state.poppler_path = 'poppler/bin' if os.path.exists('poppler/bin') else None
+        st.session_state.tesseract_path = 'Tesseract-OCR/tesseract.exe' if os.path.exists('Tesseract-OCR') else None
+        if st.session_state.tesseract_path:
+            pytesseract.pytesseract.tesseract_cmd = st.session_state.tesseract_path
+
+configure_paths()
 
 # Hindi digit map
 HINDI_DIGIT_MAP = {
@@ -130,17 +137,64 @@ def extract_page_text(pdf_path: str, page_num: int, language: str) -> str:
         return ""
     return ""
 
-[Rest of your existing functions remain exactly the same...]
+# [Keep all your existing Hindi and English extraction functions exactly as they were]
 
 def main():
     st.title("📖 Enhanced Multi-Language PDF TOC Extractor")
     
-    # Environment check
+    # Environment verification
+    st.write("## Environment Verification")
+    with st.expander("System Configuration"):
+        st.write(f"Poppler path: {st.session_state.poppler_path}")
+        st.write(f"Tesseract path: {st.session_state.tesseract_path}")
+        
+        try:
+            tesseract_version = subprocess.run(['tesseract', '--version'], 
+                                             capture_output=True, text=True)
+            st.code(tesseract_version.stdout)
+        except Exception as e:
+            st.error(f"Tesseract version check failed: {str(e)}")
+
     if not check_tesseract():
         st.error("Tesseract OCR not properly configured! Check deployment logs.")
         st.stop()
 
-    [Rest of your existing main() function remains the same...]
+    # Language selection
+    st.session_state.language = st.radio(
+        "Select PDF Language:",
+        ["Hindi", "English"],
+        horizontal=True
+    )
+    
+    # Extra pages setting
+    st.session_state.extra_pages = st.slider(
+        "Include extra pages after TOC pages",
+        min_value=0,
+        max_value=20,
+        value=st.session_state.extra_pages,
+        help="TOC might span multiple pages"
+    )
+    
+    # File upload section
+    uploaded_file = st.file_uploader("Upload PDF file", type="pdf")
+    
+    if uploaded_file is not None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = os.path.join(temp_dir, "uploaded.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            
+            if st.button("Extract Table of Contents"):
+                with st.spinner("Processing PDF..."):
+                    try:
+                        # [Keep your existing processing logic here]
+                        # This remains exactly the same as in your original code
+                        
+                    except Exception as e:
+                        st.error(f"Error processing PDF: {str(e)}")
+                        st.error("Please check the environment verification above")
+
+    # [Keep the rest of your original main() function unchanged]
 
 if __name__ == "__main__":
     main()
