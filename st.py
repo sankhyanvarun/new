@@ -97,28 +97,58 @@ def normalize_hindi_digits(text):
 def extract_page_text(pdf_path: str, page_num: int, language: str) -> str:
     """Extract text from a single page with OCR and enhancement"""
     try:
+        # Verify paths exist
+        if not os.path.exists(pdf_path):
+            st.error(f"PDF path does not exist: {pdf_path}")
+            return ""
+            
+        # Debug output
+        st.info(f"Processing page {page_num+1} with language: {language}")
+        
+        # Convert PDF to image
         images = convert_from_path(
             pdf_path,
             first_page=page_num + 1,
             last_page=page_num + 1,
             poppler_path=st.session_state.poppler_path,
-            dpi=300 if language == "Hindi" else 400,
+            dpi=300,
             grayscale=True,
+            thread_count=4
         )
-        if images:
-            img = images[0]
-            enhanced_img = enhance_image(img)  # Apply enhancement to both languages
-            config = r'--oem 1 --psm 6'
-            lang = "hin" if language == "Hindi" else "eng"
-            page_text = pytesseract.image_to_string(enhanced_img, config=config, lang=lang)
+        
+        if not images:
+            st.warning(f"No images generated for page {page_num+1}")
+            return ""
             
-            # Normalize Hindi digits for both languages
+        img = images[0]
+        
+        # Apply enhancements
+        enhanced_img = enhance_image(img)
+        
+        # Save debug image
+        debug_img_path = f"debug_page_{page_num+1}.png"
+        enhanced_img.save(debug_img_path)
+        st.image(enhanced_img, caption=f"Processed Page {page_num+1}", use_column_width=True)
+        
+        # OCR configuration
+        config = r'--oem 3 --psm 6'
+        lang = "hin+eng" if language == "Hindi" else "eng"
+        
+        try:
+            page_text = pytesseract.image_to_string(enhanced_img, config=config, lang=lang)
+            st.text_area(f"Raw OCR Output (Page {page_num+1})", page_text, height=150)
+            
             if language == "Hindi":
                 return normalize_hindi_digits(page_text) + "\n"
             return page_text + "\n"
-    except Exception:
+            
+        except pytesseract.TesseractError as e:
+            st.error(f"Tesseract Error: {str(e)}")
+            return ""
+            
+    except Exception as e:
+        st.error(f"Extraction Error: {str(e)}")
         return ""
-    return ""
 
 def extract_text_from_pages(pdf_path: str, page_indices: List[int], language: str) -> str:
     """Extract text from multiple pages with OCR"""
@@ -130,19 +160,21 @@ def extract_text_from_pages(pdf_path: str, page_indices: List[int], language: st
 # ========== HINDI-SPECIFIC FUNCTIONS ==========
 def find_toc_page_indices_hindi(pdf_path: str, max_search_pages: int = 20) -> List[int]:
     """Find pages with Hindi TOC keywords"""
-    indices: List[int] = []
+    indices = []
     try:
-        reader = PyPDF2.PdfReader(pdf_path)
-        num_pages = len(reader.pages)
-        search_limit = min(num_pages, max_search_pages)
+        total_pages = get_total_pages(pdf_path)
+        st.info(f"Searching first {min(max_search_pages, total_pages)} pages for TOC")
         
-        # Hindi TOC keywords
-        toc_keywords = ["विषय सूची", "अनुक्रमणिका", "सूची", "विषय-सूची", "अनुक्रम", "सामग्री"]
-
-        for i in range(search_limit):
+        for i in range(min(max_search_pages, total_pages)):
             page_text = extract_page_text(pdf_path, i, "Hindi")
-            # Check for any TOC keyword
+            
+            # Debug output
+            with st.expander(f"Page {i+1} Content", expanded=False):
+                st.text(page_text)
+                
+            toc_keywords = ["विषय सूची", "अनुक्रमणिका", "सूची", "विषय-सूची"]
             if any(keyword in page_text for keyword in toc_keywords):
+                st.success(f"Found TOC keyword on page {i+1}")
                 indices.append(i)
                 
         return indices
@@ -293,6 +325,24 @@ def parse_toc_english(text: str) -> List[Dict[str, str]]:
 
 # ========== UI AND MAIN APP ==========
 def main():
+    
+    # Environment verification
+    st.write("## System Verification")
+    
+    # Check critical paths
+    st.write(f"Poppler path exists: {os.path.exists(st.session_state.poppler_path)}")
+    st.write(f"Tesseract path exists: {os.path.exists(st.session_state.tesseract_path)}")
+    
+    # Test Tesseract
+    try:
+        tesseract_version = subprocess.run(['tesseract', '--version'], 
+                                        capture_output=True, text=True)
+        st.code(tesseract_version.stdout)
+    except Exception as e:
+        st.error(f"Tesseract check failed: {str(e)}")
+        st.stop()
+        
+        
     st.title("📖 Enhanced Multi-Language PDF TOC Extractor")
     st.markdown("""
     Extract Table of Contents from Hindi or English PDFs:
