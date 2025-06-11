@@ -9,7 +9,25 @@ import tempfile
 import PyPDF2
 import numpy as np
 from typing import List, Dict
+import subprocess
+import sys
 
+def install_system_dependencies():
+    try:
+        subprocess.run(['apt-get', 'update'], check=True)
+        subprocess.run(['apt-get', 'install', '-y', 
+                       'tesseract-ocr',
+                       'tesseract-ocr-hin',
+                       'tesseract-ocr-eng',
+                       'poppler-utils',
+                       'libsm6',
+                       'libxext6',
+                       'ffmpeg'], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to install dependencies: {e}", file=sys.stderr)
+
+# Run at startup
+install_system_dependencies()
 # Set page config
 st.set_page_config(page_title="Enhanced Multi-Language TOC Extractor", layout="wide")
 
