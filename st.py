@@ -33,16 +33,22 @@ install_system_dependencies()
 st.set_page_config(page_title="Enhanced Multi-Language TOC Extractor", layout="wide")
 
 # Initialize session state
+# At the start of your script (before main())
+import os
+
+# Set system paths for Streamlit Cloud
+if os.path.exists('/usr/bin/tesseract'):  # Detects cloud environment
+    st.session_state.poppler_path = '/usr/bin'
+    st.session_state.tesseract_path = '/usr/bin/tesseract'
+else:  # Local development
+    st.session_state.poppler_path = 'poppler/bin'  # Your local path
+    st.session_state.tesseract_path = 'Tesseract-OCR/tesseract.exe'
 if 'toc_df' not in st.session_state:
     st.session_state.toc_df = pd.DataFrame(columns=["Title", "Page"])
 if 'raw_text' not in st.session_state:
     st.session_state.raw_text = ""
 if 'language' not in st.session_state:
     st.session_state.language = "Hindi"
-if 'poppler_path' not in st.session_state:
-    st.session_state.poppler_path = 'poppler/bin'
-if 'tesseract_path' not in st.session_state:
-    st.session_state.tesseract_path = 'Tesseract-OCR/tesseract.exe'
 if 'extra_pages' not in st.session_state:
     st.session_state.extra_pages = 2
 if 'edit_mode' not in st.session_state:
