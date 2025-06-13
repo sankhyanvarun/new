@@ -21,10 +21,6 @@ if 'raw_text' not in st.session_state:
     st.session_state.raw_text = ""
 if 'language' not in st.session_state:
     st.session_state.language = "Hindi"
-if 'poppler_path' not in st.session_state:
-    st.session_state.poppler_path = 'poppler/bin'
-if 'tesseract_path' not in st.session_state:
-    st.session_state.tesseract_path = 'Tesseract-OCR/tesseract.exe'
 if 'extra_pages' not in st.session_state:
     st.session_state.extra_pages = 2
 if 'edit_mode' not in st.session_state:
@@ -35,6 +31,11 @@ if 'new_col_default' not in st.session_state:
     st.session_state.new_col_default = ""
 if 'max_pages' not in st.session_state:
     st.session_state.max_pages = 70  # Default max pages for large PDFs
+
+# Configure paths for cloud compatibility
+poppler_path = '/usr/bin' if os.path.exists('/usr/bin') else None
+tesseract_path = '/usr/bin/tesseract' if os.path.exists('/usr/bin/tesseract') else 'tesseract'
+pytesseract.pytesseract.tesseract_cmd = tesseract_path
 
 # Hindi digit map
 HINDI_DIGIT_MAP = {
@@ -53,33 +54,30 @@ def get_total_pages(pdf_path):
 
 def enhance_image(img):
     """Apply advanced image enhancement for better OCR results"""
-    # Convert to grayscale
-    img = img.convert('L')
-    
-    # Convert to OpenCV format for advanced processing
-    cv_img = np.array(img)
-    
-    # Apply denoising
-    if cv_img.size > 0:  # Check if image is not empty
+    try:
+        # Convert to grayscale
+        img = img.convert('L')
+        
+        # Convert to OpenCV format for advanced processing
+        cv_img = np.array(img)
+        
+        # Apply denoising
         cv_img = cv2.fastNlMeansDenoising(cv_img, None, 10, 7, 21)
-    
-    # Enhance contrast using CLAHE
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    cv_img = clahe.apply(cv_img)
-    
-    # Convert back to PIL image
-    img = Image.fromarray(cv_img)
-    
-    # Apply sharpening
-    enhancer = ImageEnhance.Sharpness(img)
-    img = enhancer.enhance(1.5)
+        
+        # Enhance contrast using CLAHE
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        cv_img = clahe.apply(cv_img)
+        
+        # Convert back to PIL image
+        img = Image.fromarray(cv_img)
+    except Exception:
+        # Fallback to basic enhancement if OpenCV fails
+        img = img.filter(ImageFilter.MedianFilter())
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(2)
     
     # Apply thresholding
     img = img.point(lambda p: 0 if p < 160 else 255)
-    
-    # Remove salt & pepper noise
-    img = img.filter(ImageFilter.MedianFilter(size=3))
-    
     return img
 
 def truncate_pdf(input_path: str, output_path: str, max_pages: int = 70) -> None:
@@ -106,9 +104,10 @@ def extract_page_text(pdf_path: str, page_num: int, language: str) -> str:
             pdf_path,
             first_page=page_num + 1,
             last_page=page_num + 1,
-            poppler_path=st.session_state.poppler_path,
+            poppler_path=poppler_path,
             dpi=300,
             grayscale=True,
+            thread_count=4
         )
         if images:
             img = images[0]
@@ -132,7 +131,9 @@ def extract_text_from_pages(pdf_path: str, page_indices: List[int], language: st
     """Extract text from multiple pages with OCR"""
     accumulated = ""
     for idx in page_indices:
-        accumulated += extract_page_text(pdf_path, idx, language)
+        page_text = extract_page_text(pdf_path, idx, language)
+        if page_text:
+            accumulated += page_text
     return accumulated
 
 # ========== HINDI-SPECIFIC FUNCTIONS ==========
@@ -282,7 +283,6 @@ def parse_toc_english(text: str) -> List[Dict[str, str]]:
                 continue
                 
             # Attempt to split into chapter and page number
-            # FIXED REGEX PATTERNS FOR BETTER EXTRACTION
             m = re.match(r'^(.*?)[\s.\-]+\s*(\d+)\s*$', full_text)
             if not m:
                 # Fallback: match any trailing digits
@@ -303,11 +303,20 @@ def main():
     st.title("📖 Enhanced Multi-Language PDF TOC Extractor")
     st.markdown("""
     Extract Table of Contents from Hindi or English PDFs:
-    - **Enhanced Image Processing**: Advanced preprocessing for better OCR results
-    - **Large PDF Handling**: Automatically process only first 70 pages for large documents
-    - **Multi-Language Support**: Optimized for both Hindi and English documents
-    - **Flexible Editing**: Edit, add, and modify TOC entries after extraction
+    - **Advanced OCR**: Professional-grade text extraction with image enhancement
+    - **Cloud Optimized**: Works seamlessly on Streamlit Cloud
+    - **Large PDF Support**: Automatically processes first 70 pages for large documents
+    - **Multi-Language**: Specialized handling for both Hindi and English documents
     """)
+    
+    # System verification
+    st.subheader("System Verification")
+    try:
+        tesseract_version = pytesseract.get_tesseract_version()
+        st.success(f"Tesseract OCR {tesseract_version} is ready!")
+        st.write(f"Poppler path: {poppler_path or 'System default'}")
+    except:
+        st.error("Tesseract not properly configured!")
     
     # Language selection
     st.session_state.language = st.radio(
@@ -317,38 +326,24 @@ def main():
     )
     
     # Configuration
-    with st.expander("Configuration Settings", expanded=False):
+    with st.expander("Processing Settings", expanded=True):
         col1, col2 = st.columns(2)
         with col1:
-            st.session_state.poppler_path = st.text_input(
-                "Poppler Path", 
-                value=st.session_state.poppler_path
+            st.session_state.extra_pages = st.slider(
+                "Extra pages after TOC",
+                min_value=0,
+                max_value=20,
+                value=st.session_state.extra_pages,
+                help="TOC might span multiple pages"
             )
         with col2:
-            st.session_state.tesseract_path = st.text_input(
-                "Tesseract Path", 
-                value=st.session_state.tesseract_path
+            st.session_state.max_pages = st.slider(
+                "Max pages for large PDFs",
+                min_value=10,
+                max_value=200,
+                value=st.session_state.max_pages,
+                help="For large PDFs, only process first N pages"
             )
-        
-        pytesseract.pytesseract.tesseract_cmd = st.session_state.tesseract_path
-        
-        # Max pages setting
-        st.session_state.max_pages = st.slider(
-            "Max pages to process for large PDFs",
-            min_value=10,
-            max_value=200,
-            value=st.session_state.max_pages,
-            help="For large PDFs, only process first N pages"
-        )
-    
-    # Extra pages setting
-    st.session_state.extra_pages = st.slider(
-        "Include extra pages after TOC pages",
-        min_value=0,
-        max_value=20,
-        value=st.session_state.extra_pages,
-        help="TOC might span multiple pages"
-    )
     
     # File upload section
     uploaded_file = st.file_uploader("Upload PDF file", type="pdf")
@@ -436,11 +431,10 @@ def main():
                             st.session_state.toc_df = pd.DataFrame(columns=["Title", "Page"])
                             
                         # Show raw text extraction message
-                        st.info(f"Extracted {len(st.session_state.raw_text)} characters of raw text from {len(expanded_indices)} pages")
+                        st.info(f"Extracted {len(st.session_state.raw_text)} characters from {len(expanded_indices)} pages")
                             
                     except Exception as e:
                         st.error(f"Error processing PDF: {str(e)}")
-                        st.error("Please check your Poppler and Tesseract paths")
     
     # Edit TOC Section
     if not st.session_state.toc_df.empty:
