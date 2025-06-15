@@ -300,14 +300,14 @@ def parse_toc_english(text: str) -> List[Dict[str, str]]:
 
 # ========== UI AND MAIN APP ==========
 def main():
-    st.title("📖 Enhanced Multi-Language PDF TOC Extractor")
+    st.title("📖 Hindi + English PDF TOC Extractor")
     
     # System verification
     st.subheader("System Verification")
     try:
         tesseract_version = pytesseract.get_tesseract_version()
-        st.success(f"Tesseract OCR {tesseract_version} is ready!")
-        st.write(f"Poppler path: {poppler_path or 'System default'}")
+        # st.success(f"Tesseract OCR {tesseract_version} is ready!")
+        # st.write(f"Poppler path: {poppler_path or 'System default'}")
     except:
         st.error("Tesseract not properly configured!")
     
