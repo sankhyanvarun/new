@@ -301,13 +301,6 @@ def parse_toc_english(text: str) -> List[Dict[str, str]]:
 # ========== UI AND MAIN APP ==========
 def main():
     st.title("📖 Enhanced Multi-Language PDF TOC Extractor")
-    st.markdown("""
-    Extract Table of Contents from Hindi or English PDFs:
-    - **Advanced OCR**: Professional-grade text extraction with image enhancement
-    - **Cloud Optimized**: Works seamlessly on Streamlit Cloud
-    - **Large PDF Support**: Automatically processes first 70 pages for large documents
-    - **Multi-Language**: Specialized handling for both Hindi and English documents
-    """)
     
     # System verification
     st.subheader("System Verification")
