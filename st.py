@@ -332,7 +332,7 @@ def main():
         with col2:
             st.session_state.max_pages = st.slider(
                 "Max pages for large PDFs",
-                min_value=10,
+                min_value=5,
                 max_value=200,
                 value=st.session_state.max_pages,
                 help="For large PDFs, only process first N pages"
