@@ -352,7 +352,7 @@ def main():
                     try:
                         # Check if PDF is large
                         file_size = os.path.getsize(pdf_path)
-                        is_large_pdf = file_size > 50 * 1024 * 1024  # 50 MB
+                        is_large_pdf = file_size > 4 * 1024 * 1024  # 4 MB
                         truncated_path = None
                         
                         if is_large_pdf:
