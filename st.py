@@ -30,7 +30,9 @@ if 'new_col_name' not in st.session_state:
 if 'new_col_default' not in st.session_state:
     st.session_state.new_col_default = ""
 if 'max_pages' not in st.session_state:
-    st.session_state.max_pages = 70  # Default max pages for large PDFs
+    st.session_state.max_pages = 70
+if 'start_page' not in st.session_state:  # NEW: Starting page selection
+    st.session_state.start_page = 1
 
 # Configure paths for cloud compatibility
 poppler_path = '/usr/bin' if os.path.exists('/usr/bin') else None
@@ -137,17 +139,17 @@ def extract_text_from_pages(pdf_path: str, page_indices: List[int], language: st
     return accumulated
 
 # ========== HINDI-SPECIFIC FUNCTIONS ==========
-def find_toc_page_indices_hindi(pdf_path: str, max_search_pages: int = 20) -> List[int]:
+def find_toc_page_indices_hindi(pdf_path: str, start_page: int = 0, max_search_pages: int = 20) -> List[int]:
     """Find pages with Hindi TOC keywords"""
     indices: List[int] = []
     try:
         total_pages = get_total_pages(pdf_path)
-        search_limit = min(total_pages, max_search_pages)
+        search_limit = min(total_pages, start_page + max_search_pages)
         
         # Hindi TOC keywords
         toc_keywords = ["विषय सूची", "अनुक्रमणिका", "सूची", "विषय-सूची", "अनुक्रम", "सामग्री"]
 
-        for i in range(search_limit):
+        for i in range(start_page, search_limit):
             page_text = extract_page_text(pdf_path, i, "Hindi")
             # Check for any TOC keyword
             if any(keyword in page_text for keyword in toc_keywords):
@@ -173,6 +175,7 @@ def extract_toc_hindi(text):
     toc_entries = []
     current_title_lines = []
     digit_pattern = r'[\d०१२३४५६७८९]+$'  # Combined digit pattern
+    multi_line_threshold = 4  # Minimum characters to consider as valid title
 
     for line in lines:
         clean_line = line.strip()
@@ -188,7 +191,7 @@ def extract_toc_hindi(text):
             title_part = clean_line.rsplit(page_number, 1)[0].strip("–-—:. ")
             
             # Case 1: Page number with minimal title text + accumulated lines
-            if current_title_lines and len(title_part) < 5:
+            if current_title_lines and len(title_part) < multi_line_threshold:
                 title = ' '.join(current_title_lines).strip()
                 toc_entries.append({
                     "Title": title,
@@ -205,7 +208,7 @@ def extract_toc_hindi(text):
                         "Page": normalize_hindi_digits(page_number)
                     })
                     current_title_lines = []
-                if title_part:
+                if title_part and len(title_part) >= multi_line_threshold:
                     toc_entries.append({
                         "Title": title_part,
                         "Page": normalize_hindi_digits(page_number)
@@ -217,25 +220,25 @@ def extract_toc_hindi(text):
     # Handle any remaining accumulated lines
     if current_title_lines:
         title = ' '.join(current_title_lines).strip()
-        if len(title) > 5:
+        if len(title) >= multi_line_threshold:
             toc_entries.append({"Title": title, "Page": "?"})
 
     # Filter out invalid entries
     filtered_entries = [
         entry for entry in toc_entries
-        if len(entry["Title"]) >= 5 and not re.match(r'^\d+$', entry["Title"])
+        if len(entry["Title"]) >= multi_line_threshold and not re.match(r'^\d+$', entry["Title"])
     ]
     
     return filtered_entries
 
 # ========== ENGLISH-SPECIFIC FUNCTIONS ==========
-def find_toc_page_indices_english(pdf_path: str, max_search_pages: int = 20) -> List[int]:
+def find_toc_page_indices_english(pdf_path: str, start_page: int = 0, max_search_pages: int = 20) -> List[int]:
     indices: List[int] = []
     try:
         total_pages = get_total_pages(pdf_path)
-        search_limit = min(total_pages, max_search_pages)
+        search_limit = min(total_pages, start_page + max_search_pages)
 
-        for i in range(search_limit):
+        for i in range(start_page, search_limit):
             page_text = extract_page_text(pdf_path, i, "English")
             lower_all = page_text.lower()
             
@@ -258,6 +261,10 @@ def parse_toc_english(text: str) -> List[Dict[str, str]]:
     entries: List[Dict[str, str]] = []
     skip_terms = ["table of contents", "contents", "page", "toc", "chapter"]
     current_entry_lines = []  # Collect lines for the current TOC entry
+    min_title_length = 4  # Minimum characters to consider as valid title
+
+    # Improved pattern to match page numbers with various separators
+    page_num_pattern = r'(\d+)[\s.]*$'
 
     for raw_line in text.split('\n'):
         line = raw_line.strip()
@@ -268,7 +275,9 @@ def parse_toc_english(text: str) -> List[Dict[str, str]]:
         cleaned = normalize_hindi_digits(line)
         
         # Check if this line ends with a sequence of digits (page number)
-        if re.search(r'\d+\s*$', cleaned):
+        page_match = re.search(page_num_pattern, cleaned)
+        if page_match:
+            page_number = page_match.group(1)
             full_text = ""
             if current_entry_lines:
                 # Combine buffered lines with current line
@@ -282,16 +291,12 @@ def parse_toc_english(text: str) -> List[Dict[str, str]]:
             if any(term in lower_text for term in skip_terms):
                 continue
                 
-            # Attempt to split into chapter and page number
-            m = re.match(r'^(.*?)[\s.\-]+\s*(\d+)\s*$', full_text)
-            if not m:
-                # Fallback: match any trailing digits
-                m = re.match(r'^(.*?)(\d+)\s*$', full_text)
-                
-            if m:
-                chapter = m.group(1).strip()
-                page_no = m.group(2).strip()
-                entries.append({"Title": chapter, "Page": page_no})
+            # Extract title by removing the page number
+            title_part = re.sub(page_num_pattern, '', full_text).strip(" .-–—:")
+            
+            # Only add if title is meaningful
+            if len(title_part) >= min_title_length:
+                entries.append({"Title": title_part, "Page": page_number})
         else:
             # Line doesn't end with page number → buffer it
             current_entry_lines.append(cleaned)
@@ -306,7 +311,7 @@ def main():
     st.subheader("System Verification")
     try:
         tesseract_version = pytesseract.get_tesseract_version()
-        # st.success(f"Tesseract OCR {tesseract_version} is ready!")
+        st.success(f"Tesseract OCR {tesseract_version} is ready!")
         # st.write(f"Poppler path: {poppler_path or 'System default'}")
     except:
         st.error("Tesseract not properly configured!")
@@ -337,6 +342,15 @@ def main():
                 value=st.session_state.max_pages,
                 help="For large PDFs, only process first N pages"
             )
+        
+        # NEW: Starting page selection
+        st.session_state.start_page = st.number_input(
+            "Starting page for extraction (1-based)",
+            min_value=1,
+            max_value=1000,
+            value=st.session_state.start_page,
+            help="The page number from which to start searching for TOC"
+        )
     
     # File upload section
     uploaded_file = st.file_uploader("Upload PDF file", type="pdf")
@@ -364,9 +378,14 @@ def main():
                             extraction_path = pdf_path
                         
                         # Language-specific extraction
+                        start_page_index = st.session_state.start_page - 1  # Convert to 0-based index
+                        
                         if st.session_state.language == "Hindi":
                             # Find TOC pages
-                            toc_indices = find_toc_page_indices_hindi(extraction_path)
+                            toc_indices = find_toc_page_indices_hindi(
+                                extraction_path, 
+                                start_page=start_page_index
+                            )
                             
                             # Expand TOC indices
                             expanded_indices = set()
@@ -374,10 +393,11 @@ def main():
                                 for offset in range(0, st.session_state.extra_pages + 1):
                                     expanded_indices.add(i + offset)
                             
-                            # If no TOC found, use first 20 pages
+                            # If no TOC found, use starting page range
                             if not expanded_indices:
                                 total_pages = get_total_pages(extraction_path)
-                                expanded_indices = set(range(0, min(20, total_pages)))
+                                end_page = min(start_page_index + 20, total_pages)
+                                expanded_indices = set(range(start_page_index, end_page))
                             
                             # Extract text from identified pages
                             extracted_text = extract_text_from_pages(
@@ -391,7 +411,10 @@ def main():
                             toc_entries = extract_toc_hindi(extracted_text) or []
                         else:  # English
                             # Find TOC pages
-                            toc_indices = find_toc_page_indices_english(extraction_path)
+                            toc_indices = find_toc_page_indices_english(
+                                extraction_path, 
+                                start_page=start_page_index
+                            )
                             
                             # Expand TOC indices
                             expanded_indices = set()
@@ -399,10 +422,11 @@ def main():
                                 for offset in range(0, st.session_state.extra_pages + 1):
                                     expanded_indices.add(i + offset)
                             
-                            # If no TOC found, use first 20 pages
+                            # If no TOC found, use starting page range
                             if not expanded_indices:
                                 total_pages = get_total_pages(extraction_path)
-                                expanded_indices = set(range(0, min(20, total_pages)))
+                                end_page = min(start_page_index + 20, total_pages)
+                                expanded_indices = set(range(start_page_index, end_page))
                             
                             # Extract text from identified pages
                             extracted_text = extract_text_from_pages(
@@ -424,17 +448,17 @@ def main():
                             st.session_state.toc_df = pd.DataFrame(columns=["Title", "Page"])
                             
                         # Show raw text extraction message
-                        st.info(f"Extracted {len(st.session_state.raw_text)} characters from {len(expanded_indices)} pages")
+                        st.info(f"Extracted {len(st.session_state.raw_text)} characters from {len(expanded_indices)} pages (starting from page {st.session_state.start_page})")
                             
                     except Exception as e:
                         st.error(f"Error processing PDF: {str(e)}")
     
-    # Edit TOC Section
+    # Edit TOC Section - FIXED: stabilized display
     if not st.session_state.toc_df.empty:
         st.subheader("Table of Contents")
         
         # Display non-editable preview
-        st.dataframe(st.session_state.toc_df, use_container_width=True)
+        st.dataframe(st.session_state.toc_df, use_container_width=True, key="toc_preview")
         
         # Edit mode toggle
         if not st.session_state.edit_mode:
@@ -453,11 +477,12 @@ def main():
                 column_config={
                     "Title": st.column_config.TextColumn("Chapter Title", width="large"),
                     "Page": st.column_config.TextColumn("Page Number", width="small")
-                }
+                },
+                key="toc_editor"  # FIXED: Added key to stabilize display
             )
             
             # Edit controls
-            col1, col2, col3 = st.columns(3)
+            col1, col2 = st.columns(2)
             with col1:
                 if st.button("💾 Save Changes"):
                     st.session_state.toc_df = edited_df
@@ -469,8 +494,8 @@ def main():
                     st.session_state.edit_mode = False
                     st.info("Changes discarded")
             
-            # Advanced editing options
-            with st.expander("🔄 Advanced Editing Tools"):
+            # Advanced editing options - FIXED: row/column editing
+            with st.expander("🔄 Advanced Editing Tools", expanded=True):
                 # Row insertion at specific position
                 st.subheader("Insert Row at Specific Position")
                 with st.form("row_insert_form"):
@@ -486,7 +511,7 @@ def main():
                     
                     if st.form_submit_button("Insert Row"):
                         # Create new row as DataFrame
-                        new_row = pd.DataFrame([[new_title, new_page]], columns=["Title", "Page"])
+                        new_row = pd.DataFrame([[new_title, new_page]], columns=edited_df.columns)
                         
                         # Convert 1-based position to 0-based index
                         pos_index = insert_position - 1
@@ -520,7 +545,7 @@ def main():
     # Raw text section for both languages
     if 'raw_text' in st.session_state and st.session_state.raw_text:
         with st.expander("View Raw Extracted Text"):
-            st.text_area("Raw OCR Output", st.session_state.raw_text, height=300)
+            st.text_area("Raw OCR Output", st.session_state.raw_text, height=300, key="raw_text_area")
             st.info(f"Total characters: {len(st.session_state.raw_text)}")
     
     # Download section (always visible if we have data)
