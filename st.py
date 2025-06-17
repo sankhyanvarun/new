@@ -31,7 +31,7 @@ if 'new_col_default' not in st.session_state:
     st.session_state.new_col_default = ""
 if 'max_pages' not in st.session_state:
     st.session_state.max_pages = 70
-if 'start_page' not in st.session_state:  # NEW: Starting page selection
+if 'start_page' not in st.session_state:
     st.session_state.start_page = 1
 
 # Configure paths for cloud compatibility
@@ -312,7 +312,6 @@ def main():
     try:
         tesseract_version = pytesseract.get_tesseract_version()
         st.success(f"Tesseract OCR {tesseract_version} is ready!")
-        # st.write(f"Poppler path: {poppler_path or 'System default'}")
     except:
         st.error("Tesseract not properly configured!")
     
@@ -343,7 +342,7 @@ def main():
                 help="For large PDFs, only process first N pages"
             )
         
-        # NEW: Starting page selection
+        # Starting page selection
         st.session_state.start_page = st.number_input(
             "Starting page for extraction (1-based)",
             min_value=1,
@@ -445,6 +444,7 @@ def main():
                             st.session_state.toc_df = pd.DataFrame(toc_entries)
                         else:
                             st.warning("No TOC found in the document")
+                            # FIX: Ensure we always have a valid DataFrame
                             st.session_state.toc_df = pd.DataFrame(columns=["Title", "Page"])
                             
                         # Show raw text extraction message
@@ -452,20 +452,22 @@ def main():
                             
                     except Exception as e:
                         st.error(f"Error processing PDF: {str(e)}")
+                        # FIX: Ensure we always have a valid DataFrame
+                        st.session_state.toc_df = pd.DataFrame(columns=["Title", "Page"])
     
     # Edit TOC Section - FIXED: stabilized display
+    # FIX: Only display if we have a non-empty DataFrame
     if not st.session_state.toc_df.empty:
         st.subheader("Table of Contents")
         
         # Display non-editable preview
-        st.dataframe(st.session_state.toc_df, use_container_width=True, key="toc_preview")
+        st.dataframe(st.session_state.toc_df, use_container_width=True)
         
         # Edit mode toggle
         if not st.session_state.edit_mode:
             if st.button("✏️ Edit TOC"):
                 st.session_state.edit_mode = True
                 st.session_state.backup_df = st.session_state.toc_df.copy()
-                st.experimental_rerun()
         else:
             st.subheader("Edit Mode")
             
@@ -477,8 +479,7 @@ def main():
                 column_config={
                     "Title": st.column_config.TextColumn("Chapter Title", width="large"),
                     "Page": st.column_config.TextColumn("Page Number", width="small")
-                },
-                key="toc_editor"  # FIXED: Added key to stabilize display
+                }
             )
             
             # Edit controls
@@ -494,7 +495,7 @@ def main():
                     st.session_state.edit_mode = False
                     st.info("Changes discarded")
             
-            # Advanced editing options - FIXED: row/column editing
+            # Advanced editing options
             with st.expander("🔄 Advanced Editing Tools", expanded=True):
                 # Row insertion at specific position
                 st.subheader("Insert Row at Specific Position")
@@ -522,7 +523,6 @@ def main():
                         edited_df = pd.concat([top_part, new_row, bottom_part]).reset_index(drop=True)
                         st.session_state.toc_df = edited_df
                         st.success(f"Inserted new row at position {insert_position}")
-                        st.experimental_rerun()
                 
                 # Column insertion
                 st.subheader("Add New Column")
@@ -540,12 +540,16 @@ def main():
                             st.session_state.new_col_name = col_name
                             st.session_state.new_col_default = default_value
                             st.success(f"Added new column: {col_name}")
-                            st.experimental_rerun()
+    
+    # FIX: Handle case where DataFrame is empty
+    elif not st.session_state.toc_df.empty and st.session_state.toc_df.columns.tolist() != ["Title", "Page"]:
+        st.warning("TOC data is in an invalid format. Resetting...")
+        st.session_state.toc_df = pd.DataFrame(columns=["Title", "Page"])
     
     # Raw text section for both languages
     if 'raw_text' in st.session_state and st.session_state.raw_text:
         with st.expander("View Raw Extracted Text"):
-            st.text_area("Raw OCR Output", st.session_state.raw_text, height=300, key="raw_text_area")
+            st.text_area("Raw OCR Output", st.session_state.raw_text, height=300)
             st.info(f"Total characters: {len(st.session_state.raw_text)}")
     
     # Download section (always visible if we have data)
