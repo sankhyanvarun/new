@@ -10,6 +10,7 @@ import PyPDF2
 import numpy as np
 import cv2
 from typing import List, Dict
+from io import BytesIO
 
 # Set page config
 st.set_page_config(page_title="Enhanced Multi-Language TOC Extractor", layout="wide")
@@ -33,6 +34,8 @@ if 'max_pages' not in st.session_state:
     st.session_state.max_pages = 70
 if 'start_page' not in st.session_state:
     st.session_state.start_page = 1
+if 'file_type' not in st.session_state:  # Track file type
+    st.session_state.file_type = None
 
 # Configure paths for cloud compatibility
 poppler_path = '/usr/bin' if os.path.exists('/usr/bin') else None
@@ -44,6 +47,9 @@ HINDI_DIGIT_MAP = {
     '०': '0', '१': '1', '२': '2', '३': '3', '४': '4',
     '५': '5', '६': '6', '७': '7', '८': '8', '९': '9'
 }
+
+# Supported image formats
+SUPPORTED_IMAGE_FORMATS = ["jpg", "jpeg", "png", "bmp", "tiff", "tif"]
 
 # ========== COMMON FUNCTIONS ==========
 def get_total_pages(pdf_path):
@@ -98,9 +104,23 @@ def truncate_pdf(input_path: str, output_path: str, max_pages: int = 70) -> None
 def normalize_hindi_digits(text):
     return ''.join(HINDI_DIGIT_MAP.get(ch, ch) for ch in text)
 
+def ocr_from_image(image: Image, language: str) -> str:
+    """Perform OCR on an image"""
+    try:
+        enhanced_img = enhance_image(image)
+        config = r'--oem 3 --psm 6'
+        lang = "hin+eng" if language == "Hindi" else "eng"
+        text = pytesseract.image_to_string(enhanced_img, config=config, lang=lang)
+        if language == "Hindi":
+            return normalize_hindi_digits(text)
+        return text
+    except Exception as e:
+        st.error(f"OCR Error: {str(e)}")
+        return ""
+
 # ========== TEXT EXTRACTION FUNCTIONS ==========
 def extract_page_text(pdf_path: str, page_num: int, language: str) -> str:
-    """Extract text from a single page with enhanced OCR"""
+    """Extract text from a single PDF page with enhanced OCR"""
     try:
         images = convert_from_path(
             pdf_path,
@@ -113,24 +133,14 @@ def extract_page_text(pdf_path: str, page_num: int, language: str) -> str:
         )
         if images:
             img = images[0]
-            enhanced_img = enhance_image(img)
-            
-            # OCR configuration
-            config = r'--oem 3 --psm 6'  # Improved OCR engine mode
-            lang = "hin+eng" if language == "Hindi" else "eng"  # Combined languages for better accuracy
-            page_text = pytesseract.image_to_string(enhanced_img, config=config, lang=lang)
-            
-            # Normalize Hindi digits
-            if language == "Hindi":
-                return normalize_hindi_digits(page_text) + "\n"
-            return page_text + "\n"
+            return ocr_from_image(img, language) + "\n"
     except Exception as e:
-        st.error(f"OCR Error on page {page_num+1}: {str(e)}")
+        st.error(f"PDF Processing Error on page {page_num+1}: {str(e)}")
         return ""
     return ""
 
 def extract_text_from_pages(pdf_path: str, page_indices: List[int], language: str) -> str:
-    """Extract text from multiple pages with OCR"""
+    """Extract text from multiple PDF pages with OCR"""
     accumulated = ""
     for idx in page_indices:
         page_text = extract_page_text(pdf_path, idx, language)
@@ -140,7 +150,7 @@ def extract_text_from_pages(pdf_path: str, page_indices: List[int], language: st
 
 # ========== HINDI-SPECIFIC FUNCTIONS ==========
 def find_toc_page_indices_hindi(pdf_path: str, start_page: int = 0, max_search_pages: int = 20) -> List[int]:
-    """Find pages with Hindi TOC keywords"""
+    """Find pages with Hindi TOC keywords in PDF"""
     indices: List[int] = []
     try:
         total_pages = get_total_pages(pdf_path)
@@ -233,6 +243,7 @@ def extract_toc_hindi(text):
 
 # ========== ENGLISH-SPECIFIC FUNCTIONS ==========
 def find_toc_page_indices_english(pdf_path: str, start_page: int = 0, max_search_pages: int = 20) -> List[int]:
+    """Find pages with English TOC keywords in PDF"""
     indices: List[int] = []
     try:
         total_pages = get_total_pages(pdf_path)
@@ -258,6 +269,7 @@ def find_toc_page_indices_english(pdf_path: str, start_page: int = 0, max_search
         return []
 
 def parse_toc_english(text: str) -> List[Dict[str, str]]:
+    """Parse TOC from English text (works for both PDF and image OCR)"""
     entries: List[Dict[str, str]] = []
     skip_terms = ["table of contents", "contents", "page", "toc", "chapter"]
     current_entry_lines = []  # Collect lines for the current TOC entry
@@ -303,9 +315,31 @@ def parse_toc_english(text: str) -> List[Dict[str, str]]:
             
     return entries
 
+# ========== IMAGE PROCESSING FUNCTIONS ==========
+def process_image_file(uploaded_file, language: str):
+    """Process uploaded image file and extract TOC"""
+    try:
+        image = Image.open(uploaded_file)
+        st.image(image, caption="Uploaded Image", use_column_width=True)
+        
+        # Perform OCR
+        extracted_text = ocr_from_image(image, language)
+        st.session_state.raw_text = extracted_text
+        
+        # Extract TOC based on language
+        if language == "Hindi":
+            toc_entries = extract_toc_hindi(extracted_text) or []
+        else:
+            toc_entries = parse_toc_english(extracted_text) or []
+        
+        return toc_entries
+    except Exception as e:
+        st.error(f"Error processing image: {str(e)}")
+        return []
+
 # ========== UI AND MAIN APP ==========
 def main():
-    st.title("📖 Hindi + English PDF TOC Extractor")
+    st.title("📖 PDF & Image TOC Extractor (Hindi + English)")
     
     # System verification
     st.subheader("System Verification")
@@ -317,7 +351,7 @@ def main():
     
     # Language selection
     st.session_state.language = st.radio(
-        "Select PDF Language:",
+        "Select Document Language:",
         ["Hindi", "English"],
         horizontal=True
     )
@@ -327,7 +361,7 @@ def main():
         col1, col2 = st.columns(2)
         with col1:
             st.session_state.extra_pages = st.slider(
-                "Extra pages after TOC",
+                "Extra pages after TOC (PDF only)",
                 min_value=0,
                 max_value=20,
                 value=st.session_state.extra_pages,
@@ -342,121 +376,139 @@ def main():
                 help="For large PDFs, only process first N pages"
             )
         
-        # Starting page selection
+        # Starting page selection (PDF only)
         st.session_state.start_page = st.number_input(
-            "Starting page for extraction (1-based)",
+            "Starting page for extraction (PDF only, 1-based)",
             min_value=1,
             max_value=1000,
             value=st.session_state.start_page,
             help="The page number from which to start searching for TOC"
         )
     
-    # File upload section
-    uploaded_file = st.file_uploader("Upload PDF file", type="pdf")
+    # File upload section - now supports images too
+    uploaded_file = st.file_uploader(
+        "Upload PDF or Image file", 
+        type=["pdf"] + SUPPORTED_IMAGE_FORMATS
+    )
     
     if uploaded_file is not None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            pdf_path = os.path.join(temp_dir, "uploaded.pdf")
-            with open(pdf_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-            
-            if st.button("Extract Table of Contents"):
-                with st.spinner("Processing PDF..."):
-                    try:
-                        # Check if PDF is large
-                        file_size = os.path.getsize(pdf_path)
-                        is_large_pdf = file_size > 4 * 1024 * 1024  # 4 MB
-                        truncated_path = None
-                        
-                        if is_large_pdf:
-                            st.info(f"Large PDF detected ({file_size/(1024*1024):.2f} MB). Processing first {st.session_state.max_pages} pages.")
-                            truncated_path = os.path.join(temp_dir, "truncated.pdf")
-                            truncate_pdf(pdf_path, truncated_path, max_pages=st.session_state.max_pages)
-                            extraction_path = truncated_path
-                        else:
-                            extraction_path = pdf_path
-                        
-                        # Language-specific extraction
-                        start_page_index = st.session_state.start_page - 1  # Convert to 0-based index
-                        
-                        if st.session_state.language == "Hindi":
-                            # Find TOC pages
-                            toc_indices = find_toc_page_indices_hindi(
-                                extraction_path, 
-                                start_page=start_page_index
-                            )
+        # Determine file type
+        file_extension = uploaded_file.name.split('.')[-1].lower()
+        is_image = file_extension in SUPPORTED_IMAGE_FORMATS
+        
+        # Display file info
+        st.info(f"Uploaded file: {uploaded_file.name} ({'Image' if is_image else 'PDF'})")
+        st.session_state.file_type = "image" if is_image else "pdf"
+        
+        if st.button("Extract Table of Contents"):
+            with st.spinner("Processing file..."):
+                try:
+                    toc_entries = []
+                    
+                    if is_image:
+                        # Process image file
+                        toc_entries = process_image_file(uploaded_file, st.session_state.language)
+                    else:
+                        # Process PDF file
+                        with tempfile.TemporaryDirectory() as temp_dir:
+                            pdf_path = os.path.join(temp_dir, "uploaded.pdf")
+                            with open(pdf_path, "wb") as f:
+                                f.write(uploaded_file.getbuffer())
                             
-                            # Expand TOC indices
-                            expanded_indices = set()
-                            for i in toc_indices:
-                                for offset in range(0, st.session_state.extra_pages + 1):
-                                    expanded_indices.add(i + offset)
+                            # Check if PDF is large
+                            file_size = os.path.getsize(pdf_path)
+                            is_large_pdf = file_size > 4 * 1024 * 1024  # 4 MB
+                            truncated_path = None
                             
-                            # If no TOC found, use starting page range
-                            if not expanded_indices:
-                                total_pages = get_total_pages(extraction_path)
-                                end_page = min(start_page_index + 20, total_pages)
-                                expanded_indices = set(range(start_page_index, end_page))
+                            if is_large_pdf:
+                                st.info(f"Large PDF detected ({file_size/(1024*1024):.2f} MB). Processing first {st.session_state.max_pages} pages.")
+                                truncated_path = os.path.join(temp_dir, "truncated.pdf")
+                                truncate_pdf(pdf_path, truncated_path, max_pages=st.session_state.max_pages)
+                                extraction_path = truncated_path
+                            else:
+                                extraction_path = pdf_path
                             
-                            # Extract text from identified pages
-                            extracted_text = extract_text_from_pages(
-                                extraction_path, 
-                                sorted(expanded_indices),
-                                "Hindi"
-                            )
-                            st.session_state.raw_text = extracted_text
+                            # Language-specific extraction
+                            start_page_index = st.session_state.start_page - 1  # Convert to 0-based index
                             
-                            # Attempt TOC extraction
-                            toc_entries = extract_toc_hindi(extracted_text) or []
-                        else:  # English
-                            # Find TOC pages
-                            toc_indices = find_toc_page_indices_english(
-                                extraction_path, 
-                                start_page=start_page_index
-                            )
-                            
-                            # Expand TOC indices
-                            expanded_indices = set()
-                            for i in toc_indices:
-                                for offset in range(0, st.session_state.extra_pages + 1):
-                                    expanded_indices.add(i + offset)
-                            
-                            # If no TOC found, use starting page range
-                            if not expanded_indices:
-                                total_pages = get_total_pages(extraction_path)
-                                end_page = min(start_page_index + 20, total_pages)
-                                expanded_indices = set(range(start_page_index, end_page))
-                            
-                            # Extract text from identified pages
-                            extracted_text = extract_text_from_pages(
-                                extraction_path, 
-                                sorted(expanded_indices),
-                                "English"
-                            )
-                            st.session_state.raw_text = extracted_text
-                            
-                            # Attempt TOC extraction
-                            toc_entries = parse_toc_english(extracted_text) or []
-                        
-                        # Process results
-                        if toc_entries:
-                            st.success(f"Successfully extracted {len(toc_entries)} TOC entries!")
-                            st.session_state.toc_df = pd.DataFrame(toc_entries)
-                        else:
-                            st.warning("No TOC found in the document")
-                            # FIX: Ensure we always have a valid DataFrame
-                            st.session_state.toc_df = pd.DataFrame(columns=["Title", "Page"])
-                            
-                        # Show raw text extraction message
-                        st.info(f"Extracted {len(st.session_state.raw_text)} characters from {len(expanded_indices)} pages (starting from page {st.session_state.start_page})")
-                            
-                    except Exception as e:
-                        st.error(f"Error processing PDF: {str(e)}")
-                        # FIX: Ensure we always have a valid DataFrame
+                            if st.session_state.language == "Hindi":
+                                # Find TOC pages
+                                toc_indices = find_toc_page_indices_hindi(
+                                    extraction_path, 
+                                    start_page=start_page_index
+                                )
+                                
+                                # Expand TOC indices
+                                expanded_indices = set()
+                                for i in toc_indices:
+                                    for offset in range(0, st.session_state.extra_pages + 1):
+                                        expanded_indices.add(i + offset)
+                                
+                                # If no TOC found, use starting page range
+                                if not expanded_indices:
+                                    total_pages = get_total_pages(extraction_path)
+                                    end_page = min(start_page_index + 20, total_pages)
+                                    expanded_indices = set(range(start_page_index, end_page))
+                                
+                                # Extract text from identified pages
+                                extracted_text = extract_text_from_pages(
+                                    extraction_path, 
+                                    sorted(expanded_indices),
+                                    "Hindi"
+                                )
+                                st.session_state.raw_text = extracted_text
+                                
+                                # Attempt TOC extraction
+                                toc_entries = extract_toc_hindi(extracted_text) or []
+                            else:  # English
+                                # Find TOC pages
+                                toc_indices = find_toc_page_indices_english(
+                                    extraction_path, 
+                                    start_page=start_page_index
+                                )
+                                
+                                # Expand TOC indices
+                                expanded_indices = set()
+                                for i in toc_indices:
+                                    for offset in range(0, st.session_state.extra_pages + 1):
+                                        expanded_indices.add(i + offset)
+                                
+                                # If no TOC found, use starting page range
+                                if not expanded_indices:
+                                    total_pages = get_total_pages(extraction_path)
+                                    end_page = min(start_page_index + 20, total_pages)
+                                    expanded_indices = set(range(start_page_index, end_page))
+                                
+                                # Extract text from identified pages
+                                extracted_text = extract_text_from_pages(
+                                    extraction_path, 
+                                    sorted(expanded_indices),
+                                    "English"
+                                )
+                                st.session_state.raw_text = extracted_text
+                                
+                                # Attempt TOC extraction
+                                toc_entries = parse_toc_english(extracted_text) or []
+                    
+                    # Process results
+                    if toc_entries:
+                        st.success(f"Successfully extracted {len(toc_entries)} TOC entries!")
+                        st.session_state.toc_df = pd.DataFrame(toc_entries)
+                    else:
+                        st.warning("No TOC found in the document")
                         st.session_state.toc_df = pd.DataFrame(columns=["Title", "Page"])
+                        
+                    # Show raw text extraction message
+                    if st.session_state.file_type == "pdf":
+                        st.info(f"Extracted {len(st.session_state.raw_text)} characters from PDF")
+                    else:
+                        st.info(f"Extracted {len(st.session_state.raw_text)} characters from image")
+                            
+                except Exception as e:
+                    st.error(f"Error processing file: {str(e)}")
+                    st.session_state.toc_df = pd.DataFrame(columns=["Title", "Page"])
     
-    # Edit TOC Section - FIXED: stabilized display
-    # FIX: Only display if we have a non-empty DataFrame
+    # Edit TOC Section
     if not st.session_state.toc_df.empty:
         st.subheader("Table of Contents")
         
@@ -541,18 +593,18 @@ def main():
                             st.session_state.new_col_default = default_value
                             st.success(f"Added new column: {col_name}")
     
-    # FIX: Handle case where DataFrame is empty
+    # Handle case where DataFrame is empty
     elif not st.session_state.toc_df.empty and st.session_state.toc_df.columns.tolist() != ["Title", "Page"]:
         st.warning("TOC data is in an invalid format. Resetting...")
         st.session_state.toc_df = pd.DataFrame(columns=["Title", "Page"])
     
-    # Raw text section for both languages
+    # Raw text section
     if 'raw_text' in st.session_state and st.session_state.raw_text:
         with st.expander("View Raw Extracted Text"):
             st.text_area("Raw OCR Output", st.session_state.raw_text, height=300)
             st.info(f"Total characters: {len(st.session_state.raw_text)}")
     
-    # Download section (always visible if we have data)
+    # Download section
     if not st.session_state.toc_df.empty:
         st.subheader("Download Final TOC")
         csv = st.session_state.toc_df.to_csv(index=False).encode('utf-8-sig')
