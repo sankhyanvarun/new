@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pytesseract
 from pdf2image import convert_from_path
@@ -36,6 +37,8 @@ if 'start_page' not in st.session_state:
     st.session_state.start_page = 1
 if 'file_type' not in st.session_state:
     st.session_state.file_type = None
+if 'uploaded_file_name' not in st.session_state:
+    st.session_state.uploaded_file_name = ""
 
 # Configure paths for cloud compatibility
 poppler_path = '/usr/bin' if os.path.exists('/usr/bin') else None
@@ -152,13 +155,15 @@ def extract_text_from_pages(pdf_path: str, page_indices: List[int], language: st
 def parse_toc_english(text: str) -> List[Dict[str, str]]:
     """Parse TOC from English text with enhanced handling for complex formats"""
     entries: List[Dict[str, str]] = []
-    skip_terms = ["table of contents", "contents", "page", "toc", "chapter"]
+    skip_terms = ["table of contents", "contents", "page", "toc", "chapter", "page no"]
     current_entry_lines = []  # Collect lines for the current TOC entry
     min_title_length = 4  # Minimum characters to consider as valid title
     current_section = None  # Track current section (like CHAPTER I)
+    min_page_num_length = 2  # Minimum characters for a valid page number
 
     # Enhanced pattern to match page numbers (including Roman numerals)
-    page_num_pattern = r'([ivxlcdmIVXLCDM]+|\d+)[\s.]*$'
+    # Now requires separator and minimum length for page numbers
+    page_num_pattern = r'[\s\.\-\:;]+([ivxlcdmIVXLCDM]{1,5}|\d{1,4})[\s.]*$'
 
     # Pattern to match section headers like "CHAPTER I"
     section_pattern = r'^(CHAPTER|PART|SECTION)\s*[IVXLCDM0-9]+$'
@@ -173,12 +178,21 @@ def parse_toc_english(text: str) -> List[Dict[str, str]]:
         ' ;': ';',
         ' -': '-',
         '—': '-',
+        ' .': '.',
+        ' ,': ',',
+        '  ': ' ',
+        '↲': ' ',   # Handle enter symbols
+        '↵': ' ',   # Handle enter symbols
+        '⏎': ' ',   # Handle enter symbols
     }
     
     for old, new in replacements.items():
         text = text.replace(old, new)
     
-    for raw_line in text.split('\n'):
+    # Split text into lines, handling various newline representations
+    lines = re.split(r'[\n\r]+', text)
+    
+    for raw_line in lines:
         line = raw_line.strip()
         if not line:
             continue
@@ -189,6 +203,12 @@ def parse_toc_english(text: str) -> List[Dict[str, str]]:
         
         # Check if this is a section header
         if re.match(section_pattern, line, re.IGNORECASE):
+            # If we have accumulated content, create an entry before starting new section
+            if current_entry_lines:
+                full_title = " ".join(current_entry_lines).strip()
+                if len(full_title) >= min_title_length and not any(term in full_title.lower() for term in skip_terms):
+                    entries.append({"Title": full_title, "Page": "?"})
+                current_entry_lines = []
             current_section = line
             continue
         
@@ -200,8 +220,14 @@ def parse_toc_english(text: str) -> List[Dict[str, str]]:
         # Check if this line ends with a sequence of digits or Roman numerals (page number)
         page_match = re.search(page_num_pattern, line)
         if page_match:
-            page_number = page_match.group(1).strip()
-            # The title part is the string without the page number and trailing spaces/punctuation
+            page_str = page_match.group(1).strip()
+            
+            # Skip very short "page numbers" that are likely word fragments
+            if len(page_str) < min_page_num_length:
+                current_entry_lines.append(line)
+                continue
+                
+            # The title part is the string without the page number and separator
             title_part = line[:page_match.start()].strip()
             
             # Remove trailing dots, dashes, colons, etc.
@@ -211,12 +237,12 @@ def parse_toc_english(text: str) -> List[Dict[str, str]]:
             full_title = ""
             if current_section:
                 full_title = current_section + " - "
-                current_section = None
+                current_section = None  # Reset after use
                 
             # Prepend any accumulated lines
             if current_entry_lines:
                 full_title += " ".join(current_entry_lines) + " "
-                current_entry_lines = []
+                current_entry_lines = []  # Reset after use
                 
             full_title += title_part
             
@@ -227,13 +253,24 @@ def parse_toc_english(text: str) -> List[Dict[str, str]]:
             if len(full_title) < min_title_length or any(term in full_title.lower() for term in skip_terms):
                 continue
                 
-            entries.append({"Title": full_title, "Page": page_number})
+            # Format Roman numerals consistently
+            if page_str.isdigit():
+                page_num = page_str
+            else:
+                page_num = page_str.upper()  # Standardize to uppercase Roman numerals
+                
+            entries.append({"Title": full_title, "Page": page_num})
         else:
             # Line doesn't end with page number → buffer it
             # But check if it might be a section header
             if re.match(r'^[A-Z\s\-]+$', line):
                 # Likely a section header or chapter title
+                if current_section:  # If we already have a section, add to entries
+                    full_title = " ".join(current_entry_lines).strip() if current_entry_lines else current_section
+                    if len(full_title) >= min_title_length and not any(term in full_title.lower() for term in skip_terms):
+                        entries.append({"Title": full_title, "Page": "?"})
                 current_section = line
+                current_entry_lines = []
             else:
                 current_entry_lines.append(line)
             
@@ -243,7 +280,13 @@ def parse_toc_english(text: str) -> List[Dict[str, str]]:
         if len(full_title) >= min_title_length and not any(term in full_title.lower() for term in skip_terms):
             entries.append({"Title": full_title, "Page": "?"})
             
-    return entries
+    # Filter out invalid entries with single-character page numbers
+    filtered_entries = [
+        entry for entry in entries
+        if len(entry["Page"]) >= min_page_num_length or entry["Page"] == "?"
+    ]
+    
+    return filtered_entries
 
 # ========== UI AND MAIN APP ==========
 def main():
@@ -301,6 +344,9 @@ def main():
     )
     
     if uploaded_file is not None:
+        # Store file name for CSV download
+        st.session_state.uploaded_file_name = uploaded_file.name
+        
         # Determine file type
         file_extension = uploaded_file.name.split('.')[-1].lower()
         is_image = file_extension in SUPPORTED_IMAGE_FORMATS
@@ -324,11 +370,7 @@ def main():
                         st.session_state.raw_text = extracted_text
                         
                         # Extract TOC based on language
-                        if st.session_state.language == "Hindi":
-                            # For Hindi, we'll use the same improved parser
-                            toc_entries = parse_toc_english(extracted_text) or []
-                        else:
-                            toc_entries = parse_toc_english(extracted_text) or []
+                        toc_entries = parse_toc_english(extracted_text) or []
                     else:
                         # Process PDF file
                         with tempfile.TemporaryDirectory() as temp_dir:
@@ -353,11 +395,7 @@ def main():
                             start_page_index = st.session_state.start_page - 1  # Convert to 0-based index
                             
                             # Find TOC pages
-                            if st.session_state.language == "Hindi":
-                                # For Hindi, we'll use the same improved parser
-                                toc_indices = list(range(start_page_index, start_page_index + st.session_state.max_pages))
-                            else:
-                                toc_indices = list(range(start_page_index, start_page_index + st.session_state.max_pages))
+                            toc_indices = list(range(start_page_index, start_page_index + st.session_state.max_pages))
                             
                             # Extract text from identified pages
                             extracted_text = extract_text_from_pages(
@@ -367,7 +405,7 @@ def main():
                             )
                             st.session_state.raw_text = extracted_text
                             
-                            # Use the improved parser for both languages
+                            # Use the improved parser
                             toc_entries = parse_toc_english(extracted_text) or []
                     
                     # Process results
@@ -485,13 +523,18 @@ def main():
             st.info(f"Total characters: {len(st.session_state.raw_text)}")
     
     # Download section
-    if not st.session_state.toc_df.empty:
+    if not st.session_state.toc_df.empty and st.session_state.uploaded_file_name:
         st.subheader("Download Final TOC")
+        
+        # Create CSV file name based on uploaded file name
+        base_name = os.path.splitext(st.session_state.uploaded_file_name)[0]
+        csv_file_name = f"{base_name}_table_of_contents.csv"
+        
         csv = st.session_state.toc_df.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
             label="Download TOC as CSV",
             data=csv,
-            file_name="table_of_contents.csv",
+            file_name=csv_file_name,
             mime="text/csv"
         )
 
